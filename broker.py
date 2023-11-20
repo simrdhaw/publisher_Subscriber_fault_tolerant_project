@@ -204,11 +204,12 @@ def replicate_publish_topic():
 
 def send_my_heartbeat():
     print("entered start heartbeat")
+    global broker
     while(1):
         for replica in replicas:
             heartbeat_response = requests.post(
             "http://" + replica.broker_ip+"/"+ "/heartbeat/receive",
-            params={'broker_ip': replica.broker_ip}),
+            params={'broker_ip': broker.broker_ip}),
         time.sleep(5) 
     
 
