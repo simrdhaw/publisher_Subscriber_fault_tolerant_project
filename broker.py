@@ -4,14 +4,28 @@ import time
 import json
 from threading import Thread 
 import argparse
+from collections import defaultdict
 
 app = Flask(__name__)
 
 app.name = "message_broker"
-message_queues = {}
+message_queues = {} #topic : idx0 ,idx 1,idx 2
+# {user}:{topic1} -idx
 user_to_subscribed_topics = {}
+
+
 replicas = []
 broker = []
+#replica_down = {}
+replica_down = defaultdict(list)
+class Operation:
+    def __init__(self, flask_method, broker_function,params):
+        self.flask_method = flask_method
+        self.broker_function = broker_function
+        self.params = params
+    def __str__(self):
+        #return "id: {0}, ip: {1}, is_primary: {2}".format(self.broker_id, self.broker_ip ,self.is_primary)
+        return json.dumps({"flask_method": self.flask_method, "broker_function": self.broker_function, "params": self.params})
 
 class UserTopicState:
     def __init__(self):
@@ -62,15 +76,29 @@ def publish_topic():
         if replica.is_primary:
             continue
         print(replica)
-        replication_response = requests.post(
-            "http://" + replica.broker_ip+"/replicate/publish", 
-            params={'topic': topic, 'data': data})
-        # Check response as well
-        print('replication response: ',  replication_response)
-    # Change it
+        if replica.is_alive:
+            try:
+                replication_response = requests.post(
+                    "http://" + replica.broker_ip+"/replicate/publish", 
+                    params={'topic': topic, 'data': data})
+                # Check response as well
+                print('replication response: ',  replication_response)
+            except requests.RequestException:
+                stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data});
+                print(str(stored_op))
+                replica_down[replica.broker_ip].append(stored_op)
+                print("len of replica_down at publisher : {0}".format(len(replica_down[replica.broker_ip])));
+        else:
+            stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data});
+            replica_down[replica.broker_ip].append(stored_op)
+            print("len of replica_down (else code) at publisher : {0}".format(len(replica_down[replica.broker_ip])));
+            #print(str(stored_op))
+
     response = jsonify({'message': "Published topic {0} data {1}".format(topic, data)})
     response.status_code = 200
+
     return response
+    
 
 
 @app.route("/")
@@ -110,10 +138,6 @@ def add_subscriber():
     ### Send replication message
     #print('replicas: ', replicas)
     for replica in replicas:
-        #print(replica)
-        if replica.is_primary:
-            continue
-        print(replica)
         replication_response = requests.post(
             "http://" + replica.broker_ip+"/replicate/subscribe", 
             params={'username': user, 'topic': topic})
@@ -202,14 +226,45 @@ def replicate_publish_topic():
 
     return response
 
+def run_operations(broker_ip):
+    #global replica_down
+    for oper in replica_down[broker_ip]:
+        if oper.flask_method == "post":
+            response = requests.post(
+                "http://" + broker_ip +"/"+ oper.broker_function,
+                params=oper.params),
+            print("Sent post request on upping a replica")
+        elif oper.flask_method == "get":
+            reponse = requests.get(
+                "http://" + broker_ip +"/"+ oper.broker_function,
+                params=oper.params
+            )
+        else:
+            print("invalid operation generated")
+
+
 def send_my_heartbeat():
     print("entered start heartbeat")
     global broker
+    global replica_down
     while(1):
         for replica in replicas:
-            heartbeat_response = requests.post(
-            "http://" + replica.broker_ip+"/"+ "/heartbeat/receive",
-            params={'broker_ip': broker.broker_ip}),
+            try:
+                heartbeat_response = requests.post(
+                    "http://" + replica.broker_ip +"/"+ "/heartbeat/receive",
+                    params={'broker_ip': broker.broker_ip})
+                #print("Simran:{0}".format(heartbeat_response))
+                replica.is_alive = True;
+               
+                for replica.broker_ip in replica_down:
+                    print("enter replica_down {0}".format(len(replica_down[replica.broker_ip])))
+                    run_operations(replica.broker_ip)
+                    replica_down[replica.broker_ip] = []
+                #print("broker_ip {0} is dead".format(replica.broker_ip) )
+            except requests.RequestException:
+                replica.is_alive = False;
+                print("broker_ip {0} is dead".format(replica.broker_ip) )
+        
         time.sleep(5) 
     
 
