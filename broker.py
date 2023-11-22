@@ -138,11 +138,21 @@ def add_subscriber():
     ### Send replication message
     #print('replicas: ', replicas)
     for replica in replicas:
-        replication_response = requests.post(
-            "http://" + replica.broker_ip+"/replicate/subscribe", 
-            params={'username': user, 'topic': topic})
-        # Check response as well
-        print('replication response: ',  replication_response)
+        if replica.is_alive:
+            try:
+                replication_response = requests.post(
+                    "http://" + replica.broker_ip +"/replicate/subscribe", 
+                    params={'username': user, 'topic': topic})
+            except requests.RequestException:
+                stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic})
+                print(str(stored_op))
+                replica_down[replica.broker_ip].append(stored_op)
+                print("len of replica_down at subscriber : {0}".format(len(replica_down[replica.broker_ip])))
+        else:
+            stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic});
+            replica_down[replica.broker_ip].append(stored_op)
+            print("len of replica_down (else code) at subscriber : {0}".format(len(replica_down[replica.broker_ip])));
+               
 
     response = jsonify({'message': "Successfully subscribed {0} to topic {1}".format(user, topic)})
     response.status_code = 200
