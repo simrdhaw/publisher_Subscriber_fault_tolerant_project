@@ -6,6 +6,7 @@ from threading import Thread
 import argparse
 from collections import defaultdict
 
+
 app = Flask(__name__)
 
 app.name = "message_broker"
@@ -18,14 +19,26 @@ replicas = []
 broker = []
 #replica_down = {}
 replica_down = defaultdict(list)
+
+file_path_broker_data = 'broker_data.json'
+file_path_replica_data = 'replica_data.json'
+
+ops_fid = None
+
 class Operation:
-    def __init__(self, flask_method, broker_function,params):
+    # ToDo - remove the default value of None
+    def __init__(self, flask_method, broker_function,params,operation=None):
         self.flask_method = flask_method
         self.broker_function = broker_function
         self.params = params
+        self.operation = operation
     def __str__(self):
-        #return "id: {0}, ip: {1}, is_primary: {2}".format(self.broker_id, self.broker_ip ,self.is_primary)
         return json.dumps({"flask_method": self.flask_method, "broker_function": self.broker_function, "params": self.params})
+    
+    def to_local_operation_json(self):
+        d = {k: self.params[k] for k in self.params}
+        d["operation"] = self.operation
+        return json.dumps(d)
 
 class UserTopicState:
     def __init__(self):
@@ -34,7 +47,7 @@ class UserTopicState:
     def add_subscribed_topic(self, topic):
         if topic not in self.topic_to_index:
             if topic in message_queues:
-                self.topic_to_index[topic] = len(message_queues[topic])
+                self.topic_to_index[topic] = 0 #len(message_queues[topic])
             else:
                 self.topic_to_index[topic] = 0;
 
@@ -57,7 +70,6 @@ class MessageBroker:
         self.is_alive = True
     
     def __str__(self):
-        #return "id: {0}, ip: {1}, is_primary: {2}".format(self.broker_id, self.broker_ip ,self.is_primary)
         return json.dumps({"id": self.broker_id, "ip": self.broker_ip, "is_primary": self.is_primary})
 
 
@@ -76,11 +88,15 @@ def publish_topic():
     topic = request.args["topic"]
     data = request.args["data"]
     publish_topic_internal(topic, data)
+    stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data}, "publish")
+    ops_fid.write(stored_op.to_local_operation_json())
+    ops_fid.write('\n')
+    ops_fid.flush()
     
     for replica in replicas:
-        if replica.is_primary:
-            continue
-        print(replica)
+        # if replica.is_primary:
+        #     continue
+        # print(replica)
         if replica.is_alive:
             try:
                 replication_response = requests.post(
@@ -89,12 +105,12 @@ def publish_topic():
                 # Check response as well
                 print('replication response: ',  replication_response)
             except requests.RequestException:
-                stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data});
-                print(str(stored_op))
+                #stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data});
+                #print(str(stored_op))
                 replica_down[replica.broker_ip].append(stored_op)
                 print("len of replica_down at publisher : {0}".format(len(replica_down[replica.broker_ip])));
         else:
-            stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data});
+            #stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data});
             replica_down[replica.broker_ip].append(stored_op)
             print("len of replica_down (else code) at publisher : {0}".format(len(replica_down[replica.broker_ip])));
             #print(str(stored_op))
@@ -127,24 +143,32 @@ def stream_messages():
                     continue
                 length_of_queue = len(message_queues[topic])
                 for j in range(idx, length_of_queue):
-                    yield 'data: {}\n\n'.format(message_queues[topic][j])
+                    message = 'data: {}\n\n'.format(message_queues[topic][j]) 
+                    yield message
+                    stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': j}, "stream")
+                    ops_fid.write(stored_op.to_local_operation_json())
+                    ops_fid.write('\n')
+                    ops_fid.flush()
+
+                stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': length_of_queue}, "stream")
                 if user_to_subscribed_topics[user].get_index_of_topic(topic) != length_of_queue:
                     user_to_subscribed_topics[user].set_index_of_topic(topic, length_of_queue)
                     for replica in replicas:
                         if replica.is_alive:
                             try:
-                                replication_response = requests.get(
+                                replication_response = requests.post(
                                     "http://" + replica.broker_ip +"/replicate/stream", 
                                     params={'username': user, 'topic': topic,'idx': length_of_queue})
                             except requests.RequestException:
-                                stored_op = Operation("get", "replicate/stream",{'username': user, 'topic': topic, 'idx': length_of_queue})
+                                #stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': length_of_queue})
                                 print(str(stored_op))
                                 replica_down[replica.broker_ip].append(stored_op)
                                 print("len of replica_down at subscriber : {0}".format(len(replica_down[replica.broker_ip])))
                         else:
-                            stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic});
+                            #stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': length_of_queue})
                             replica_down[replica.broker_ip].append(stored_op)
-                            print("len of replica_down (else code) at subscriber : {0}".format(len(replica_down[replica.broker_ip])));      
+                            print("len of replica_down (else code) at subscriber : {0}".format(len(replica_down[replica.broker_ip]))); 
+                   
             time.sleep(1)
     
     return Response(event_stream(), mimetype="text/event-stream")
@@ -156,6 +180,10 @@ def add_subscriber():
     topic = request.args["topic"]
     
     subscribe_user_internal(user,topic)
+    stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic}, "subscribe")
+    ops_fid.write(stored_op.to_local_operation_json())
+    ops_fid.write('\n')
+    ops_fid.flush()
 
     ### Send replication message
     #print('replicas: ', replicas)
@@ -166,12 +194,9 @@ def add_subscriber():
                     "http://" + replica.broker_ip +"/replicate/subscribe", 
                     params={'username': user, 'topic': topic})
             except requests.RequestException:
-                stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic})
-                print(str(stored_op))
                 replica_down[replica.broker_ip].append(stored_op)
                 print("len of replica_down at subscriber : {0}".format(len(replica_down[replica.broker_ip])))
         else:
-            stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic})
             replica_down[replica.broker_ip].append(stored_op)
             print("len of replica_down (else code) at subscriber : {0}".format(len(replica_down[replica.broker_ip])))
                
@@ -191,6 +216,12 @@ def add_replica():
     ip = request.args["broker_ip"]
     is_primary = bool(int(request.args["is_primary"]))
     replicas.append(MessageBroker(id, ip, is_primary))
+
+    stored_op = Operation("post", "replicate/add_replica",{'broker_id': id, 'broker_ip': ip, 'is_primary': is_primary}, "replica")
+    ops_fid.write(stored_op.to_local_operation_json())
+    ops_fid.write('\n')
+    ops_fid.flush()
+
     print("Replicated broker added by appending")
     response = jsonify({'message': "Successfully added replicated broker {0}".format(ip)})
     response.status_code = 200
@@ -216,12 +247,18 @@ def initialize_broker():
     ip = request.args["broker_ip"]
     is_primary = bool(int(request.args["is_primary"]))
     global broker
+    
     broker = MessageBroker(id, ip, is_primary)
+
+    stored_op = Operation("post", "initialize_broker",{'broker_id': id, 'broker_ip': ip, 'is_primary': is_primary}, "initialize_broker")
+    ops_fid.write(stored_op.to_local_operation_json())
+    ops_fid.write('\n')
+    ops_fid.flush()
+
     response = jsonify({'broker': str(broker)})
     response.status_code = 200
     return response
-
-
+    
 
 
 @app.route('/heartbeat/receive', methods=['POST'])
@@ -299,7 +336,7 @@ def send_my_heartbeat():
                 #print("Simran:{0}".format(heartbeat_response))
                 replica.is_alive = True;
                
-                for replica.broker_ip in replica_down:
+                if replica.broker_ip in replica_down:
                     print("enter replica_down {0}".format(len(replica_down[replica.broker_ip])))
                     run_operations(replica.broker_ip)
                     replica_down[replica.broker_ip] = []
@@ -315,13 +352,60 @@ def run_webserver(port):
     print("starting flask")
     app.run(host="0.0.0.0", port=port, threaded=True)
 
+def initialize_from_stored_ops(port):
+    try:
+        with open("ops_{0}".format(args.port), "r") as fid:
+            for line in fid:
+                d = json.loads(line)
+                if d['operation'] == "publish":
+                    topic = d["topic"]
+                    data = d["data"]
+                    publish_topic_internal(topic, data)
+                elif d['operation'] == "subscribe":
+                    user = d["username"]
+                    topic = d["topic"]
+                    subscribe_user_internal(user,topic)
+                elif d['operation'] == "stream":
+                    user = d["username"]
+                    topic = d["topic"]
+                    idx = d["idx"]
+                    user_to_subscribed_topics[user].set_index_of_topic(topic, idx)
+                elif d['operation'] == "replica":
+                    global replicas
+                    id = d["broker_id"]
+                    ip = d["broker_ip"]
+                    is_primary = bool(int(d["is_primary"]))
+                    replicas.append(MessageBroker(id, ip, is_primary))
+                elif d['operation'] == "initialize_broker":
+                    id = d["broker_id"]
+                    ip = d["broker_ip"]
+                    is_primary = bool(int(d["is_primary"]))
+                    global broker
+                    broker = MessageBroker(id, ip, is_primary)
+                else:
+                    print("Found unexpected operation: ", line)
+                    exit(1)
+    except FileNotFoundError as e:
+        print("Previous state not found, this is a fresh broker")
+
+
+        
+
 if __name__ == '__main__':
-    #print("SIMRAN")
-    thread = Thread(target = send_my_heartbeat)
-    thread.start()
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', dest='port')
     args = parser.parse_args()
+    initialize_from_stored_ops(args.port)
+
+    #global ops_fid
+    ops_fid = open("ops_{0}".format(args.port), "a")
+    if ops_fid is None:
+        # create file
+        pass
+
+    thread = Thread(target = send_my_heartbeat)
+    thread.start()
+    
     #print("Dhawan")
     webserverThread = Thread(target = run_webserver,args=(args.port,) )
     webserverThread.start()
