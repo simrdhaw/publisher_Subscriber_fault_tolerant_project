@@ -263,7 +263,7 @@ def copy_messages_sent():
     user = request.args["username"]
     topic = request.args["topic"]
     idx = request.args["length_of_queue"]
-    user_to_subscribed_topics[user].set_index_of_topic(topic, length_of_queue)
+    user_to_subscribed_topics[user].set_index_of_topic(topic, idx)
     response = jsonify({'message': " topic {0} idx {1} username {2}".format(topic, idx, user )})
     response.status_code = 200
 
