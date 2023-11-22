@@ -33,15 +33,20 @@ class UserTopicState:
     
     def add_subscribed_topic(self, topic):
         if topic not in self.topic_to_index:
-            self.topic_to_index[topic] = 0
+            if topic in message_queues:
+                self.topic_to_index[topic] = len(message_queues[topic])
+            else:
+                self.topic_to_index[topic] = 0;
 
     def get_subscribed_topics(self):
         for topic in self.topic_to_index:
             yield (topic, self.topic_to_index[topic]) 
     
-    def set_index_of_topic(self, topic, idx):
+    def set_index_of_topic(self, topic,idx):
         self.topic_to_index[topic] = idx
     
+    def get_index_of_topic(self,topic):
+        return self.topic_to_index[topic]
 
 class MessageBroker:
     def __init__(self , broker_id, broker_ip, is_primary):
@@ -120,11 +125,28 @@ def stream_messages():
             for topic,idx in  user_to_subscribed_topics[user].get_subscribed_topics():
                 if topic not in message_queues:
                     continue
-                for j in range(idx, len(message_queues[topic])):
+                length_of_queue = len(message_queues[topic])
+                for j in range(idx, length_of_queue):
                     yield 'data: {}\n\n'.format(message_queues[topic][j])
-                user_to_subscribed_topics[user].set_index_of_topic(topic, len(message_queues[topic]))
+                if user_to_subscribed_topics[user].get_index_of_topic(topic) != length_of_queue:
+                    user_to_subscribed_topics[user].set_index_of_topic(topic, length_of_queue)
+                    for replica in replicas:
+                        if replica.is_alive:
+                            try:
+                                replication_response = requests.get(
+                                    "http://" + replica.broker_ip +"/replicate/stream", 
+                                    params={'username': user, 'topic': topic,'idx': length_of_queue})
+                            except requests.RequestException:
+                                stored_op = Operation("get", "replicate/stream",{'username': user, 'topic': topic, 'idx': length_of_queue})
+                                print(str(stored_op))
+                                replica_down[replica.broker_ip].append(stored_op)
+                                print("len of replica_down at subscriber : {0}".format(len(replica_down[replica.broker_ip])))
+                        else:
+                            stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic});
+                            replica_down[replica.broker_ip].append(stored_op)
+                            print("len of replica_down (else code) at subscriber : {0}".format(len(replica_down[replica.broker_ip])));      
             time.sleep(1)
-
+    
     return Response(event_stream(), mimetype="text/event-stream")
 
 @app.route('/subscribe', methods=['POST'])
@@ -149,9 +171,9 @@ def add_subscriber():
                 replica_down[replica.broker_ip].append(stored_op)
                 print("len of replica_down at subscriber : {0}".format(len(replica_down[replica.broker_ip])))
         else:
-            stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic});
+            stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic})
             replica_down[replica.broker_ip].append(stored_op)
-            print("len of replica_down (else code) at subscriber : {0}".format(len(replica_down[replica.broker_ip])));
+            print("len of replica_down (else code) at subscriber : {0}".format(len(replica_down[replica.broker_ip])))
                
 
     response = jsonify({'message': "Successfully subscribed {0} to topic {1}".format(user, topic)})
@@ -232,6 +254,17 @@ def replicate_publish_topic():
     publish_topic_internal(topic, data)
 
     response = jsonify({'message': "Published topic {0} data {1}".format(topic, data)})
+    response.status_code = 200
+
+    return response
+
+@app.route('/replicate/stream')
+def copy_messages_sent():
+    user = request.args["username"]
+    topic = request.args["topic"]
+    idx = request.args["length_of_queue"]
+    user_to_subscribed_topics[user].set_index_of_topic(topic, length_of_queue)
+    response = jsonify({'message': " topic {0} idx {1} username {2}".format(topic, idx, user )})
     response.status_code = 200
 
     return response
