@@ -20,9 +20,6 @@ broker = []
 #replica_down = {}
 replica_down = defaultdict(list)
 
-file_path_broker_data = 'broker_data.json'
-file_path_replica_data = 'replica_data.json'
-
 ops_fid = None
 
 class Operation:
@@ -46,10 +43,10 @@ class UserTopicState:
     
     def add_subscribed_topic(self, topic):
         if topic not in self.topic_to_index:
-            if topic in message_queues:
-                self.topic_to_index[topic] = 0 #len(message_queues[topic])
-            else:
-                self.topic_to_index[topic] = 0;
+            # if topic in message_queues:
+            #     self.topic_to_index[topic] = 0 #len(message_queues[topic])
+            # else:
+            self.topic_to_index[topic] = 0;
 
     def get_subscribed_topics(self):
         for topic in self.topic_to_index:
@@ -141,15 +138,18 @@ def stream_messages():
             for topic,idx in  user_to_subscribed_topics[user].get_subscribed_topics():
                 if topic not in message_queues:
                     continue
+        
                 length_of_queue = len(message_queues[topic])
                 for j in range(idx, length_of_queue):
                     message = 'data: {}\n\n'.format(message_queues[topic][j]) 
-                    yield message
-                    stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': j}, "stream")
+                    print("yielding ", message)
+                    stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': j+1}, "stream")
                     ops_fid.write(stored_op.to_local_operation_json())
                     ops_fid.write('\n')
                     ops_fid.flush()
-
+                    user_to_subscribed_topics[user].set_index_of_topic(topic, j+1)
+                    yield message
+                # user_to_subscribed_topics[user].set_index_of_topic(topic, length_of_queue)
                 stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': length_of_queue}, "stream")
                 if user_to_subscribed_topics[user].get_index_of_topic(topic) != length_of_queue:
                     user_to_subscribed_topics[user].set_index_of_topic(topic, length_of_queue)
@@ -276,6 +276,10 @@ def replicate_add_subscriber():
     topic = request.args["topic"]
 
     subscribe_user_internal(user,topic)
+    stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic}, "subscribe")
+    ops_fid.write(stored_op.to_local_operation_json())
+    ops_fid.write('\n')
+    ops_fid.flush()
 
     response = jsonify({'message': "Successfully subscribed {0} to topic {1}".format(user, topic)})
     response.status_code = 200
@@ -289,6 +293,10 @@ def replicate_publish_topic():
     data = request.args["data"]
 
     publish_topic_internal(topic, data)
+    stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data}, "publish")
+    ops_fid.write(stored_op.to_local_operation_json())
+    ops_fid.write('\n')
+    ops_fid.flush()
 
     response = jsonify({'message': "Published topic {0} data {1}".format(topic, data)})
     response.status_code = 200
@@ -299,8 +307,14 @@ def replicate_publish_topic():
 def copy_messages_sent():
     user = request.args["username"]
     topic = request.args["topic"]
-    idx = request.args["length_of_queue"]
+    idx = request.args["idx"]
     user_to_subscribed_topics[user].set_index_of_topic(topic, idx)
+
+    stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': idx}, "stream")
+    ops_fid.write(stored_op.to_local_operation_json())
+    ops_fid.write('\n')
+    ops_fid.flush()
+
     response = jsonify({'message': " topic {0} idx {1} username {2}".format(topic, idx, user )})
     response.status_code = 200
 
