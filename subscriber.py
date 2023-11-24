@@ -52,6 +52,13 @@ def main():
         else:
             print("Invalid choice. Please enter a valid option.")
 
+
+def my_stream():
+    global resp
+    resp = requests.get("http://127.0.0.1:5000/stream", params={'username': 'simran'}, stream=True)
+    for d in resp.content:
+        print(d)
+
 if __name__ == "__main__":
     print("-------------------------Organization alerts system-----------------------------")
     main()

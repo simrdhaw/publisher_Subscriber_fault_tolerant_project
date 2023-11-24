@@ -6,9 +6,18 @@ from threading import Thread
 import argparse
 from collections import defaultdict
 
+# from flask_socketio import SocketIO,emit
+
+# import gevent
+# from gevent.pywsgi import WSGIServer
+# from gevent import monkey
+# monkey.patch_all()
+
+
 
 app = Flask(__name__)
 app.name = "message_broker"
+#socketio = SocketIO(app)
 message_queues = {} #topic : idx0 ,idx 1,idx 2
 # {user}:{topic1} -idx
 user_to_subscribed_topics = {}
@@ -62,7 +71,7 @@ class Operation:
             if replica.is_alive:
                 try:
                     replication_response = requests.post(
-                        "http://{ip}/{method}".format(ip=replica.broker_ip, method=self.flask_method), 
+                        "http://{ip}/{method}".format(ip=replica.broker_ip, method=self.broker_function), 
                         params=self.params)
                     # Check response as well
                     print('replication response: ',  replication_response)
@@ -134,8 +143,12 @@ def stream_messages():
         return response
 
     def event_stream():
+        time.sleep(1)
+        #gevent.sleep(1)
         yield 'data: Listening to new message for subscribed topics \n\n'
         for _ in range(1000):
+            time.sleep(1)
+            #gevent.sleep(1)
             # wait for source data to be available, then push it
             for topic,idx in  user_to_subscribed_topics[user].get_subscribed_topics():
                 if topic not in message_queues:
@@ -149,6 +162,7 @@ def stream_messages():
                     stored_op.replicate()
                 user_to_subscribed_topics[user].set_index_of_topic(topic, length_of_queue)                   
             time.sleep(1)
+            #gevent.sleep(1)
     
     return Response(event_stream(), mimetype="text/event-stream")
 
@@ -222,7 +236,7 @@ def receive_heartbeat():
     ip = request.args["broker_ip"]
     response = jsonify({'message': "Receiving heartbeat with ip {0}".format(ip)})
     response.status_code = 200
-    print("heartbeat recieved from ip {0}".format(ip))
+    #print("heartbeat recieved from ip {0}".format(ip))
     return response
 
 @app.route('/replicate/subscribe', methods=['POST'])
@@ -232,7 +246,7 @@ def replicate_add_subscriber():
     subscribe_user_internal(user,topic)
     stored_op = Operation("post", "replicate/subscribe",{'username': user, 'topic': topic}, "subscribe")
     stored_op.write_to_log()
-    stored_op.replicate()
+    #stored_op.replicate()
     response = jsonify({'message': "Successfully subscribed {0} to topic {1}".format(user, topic)})
     response.status_code = 200
     return response
@@ -244,23 +258,34 @@ def replicate_publish_topic():
     publish_topic_internal(topic, data)
     stored_op = Operation("post", "replicate/publish",{'topic': topic, 'data': data}, "publish")
     stored_op.write_to_log()
-    stored_op.replicate()
+    #stored_op.replicate()
     response = jsonify({'message': "Published topic {0} data {1}".format(topic, data)})
     response.status_code = 200
     return response
 
-@app.route('/replicate/stream')
+@app.route('/replicate/stream', methods=['POST'])
 def copy_messages_sent():
     user = request.args["username"]
     topic = request.args["topic"]
-    idx = request.args["idx"]
+    idx = int(request.args["idx"])
     user_to_subscribed_topics[user].set_index_of_topic(topic, idx+1)
     stored_op = Operation("post", "replicate/stream",{'username': user, 'topic': topic, 'idx': idx}, "stream")
     stored_op.write_to_log()
-    stored_op.replicate()
+    #stored_op.replicate()
     response = jsonify({'message': " topic {0} idx {1} username {2}".format(topic, idx, user )})
     response.status_code = 200
     return response
+
+# @socketio.on('connect')
+# def connect():
+#     print("connect event {0}".format(request))
+
+# @socketio.on("disconnect")
+# def disconnected():
+#     """event listener when client disconnects to the server"""
+#     print("disconnect event {0}".format(request))
+#     #emit("disconnect",f"user {request.sid} disconnected",broadcast=True)
+
 
 def run_operations(broker_ip):
     #global replica_down
@@ -300,17 +325,22 @@ def send_my_heartbeat():
             except requests.RequestException:
                 replica.is_alive = False;
                 print("broker_ip {0} is dead".format(replica.broker_ip) )
-        
-        time.sleep(5) 
+        time.sleep(5)
+        #gevent.sleep(5) 
     
 
 def run_webserver(port):
     print("starting flask")
     app.run(host="0.0.0.0", port=port, threaded=True)
+    #socketio.run(app, port=port) #threaded=True
+    # http_server = WSGIServer(('0.0.0.0', port), app)
+    # http_server.spawn = 4
+    # http_server.serve_forever()
+
 
 def initialize_from_stored_ops(port):
     try:
-        with open("ops_{0}".format(args.port), "r") as fid:
+        with open("ops_{0}".format(port), "r") as fid:
             for line in fid:
                 d = json.loads(line)
                 if d['operation'] == "publish":
@@ -353,7 +383,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     initialize_from_stored_ops(args.port)
 
-    #global ops_fid
     ops_fid = open("ops_{0}".format(args.port), "a")
     if ops_fid is None:
         # create file
@@ -362,8 +391,7 @@ if __name__ == '__main__':
     thread = Thread(target = send_my_heartbeat)
     thread.start()
     
-    #print("Dhawan")
-    webserverThread = Thread(target = run_webserver,args=(args.port,) )
+    webserverThread = Thread(target = run_webserver,args=(int(args.port),) )
     webserverThread.start()
     
     thread.join()
