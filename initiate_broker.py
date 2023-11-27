@@ -7,15 +7,15 @@ import json
 
 def get_running_aws_instances():
     # Create an EC2 client
-    ec2 = boto3.client('ec2', region_name='us-east-2',aws_access_key_id='####', 
-                aws_secret_access_key='#####')  # Ensure your AWS credentials are configured
+    ec2 = boto3.client('ec2', region_name='us-east-2',aws_access_key_id='###', 
+                aws_secret_access_key='####')  # Ensure your AWS credentials are configured
     # Retrieve information about running instances
     response = ec2.describe_instances()
     public_ips = []
     # Extract and display public IPv4 addresses of running instances
     for reservation in response['Reservations']:
         for instance in reservation['Instances']:
-            if 'PublicIpAddress' in instance:
+            if 'PublicIpAddress' in instance and instance['State']['Name'] == 'running':
                 public_ip = instance['PublicIpAddress']
                 security_groups = instance['SecurityGroups']
                 for sg in security_groups:
@@ -55,6 +55,8 @@ def initialize_broker():
     response = requests.post(f"http://{broker_node}/initialize_broker?broker_id={broker_id}&broker_ip={broker_ip}&is_primary={is_primary}")
     print(response.json())
 
+
+    
 
 def main():
     public_ips = get_running_aws_instances()
