@@ -8,8 +8,8 @@ import webbrowser
 
 def get_running_aws_instances():
     # Create an EC2 client
-    ec2 = boto3.client('ec2', region_name='us-east-2',aws_access_key_id='AKIAUD4N6KVNORGX43GU', 
-                aws_secret_access_key='uNLjEEH6jbV1zhoRYsSL52Xx6jX0y7AAOZPmr9qr')  # Ensure your AWS credentials are configured
+    ec2 = boto3.client('ec2', region_name='us-east-2',aws_access_key_id='###', 
+                aws_secret_access_key='###')  # Ensure your AWS credentials are configured
     # Retrieve information about running instances
     response = ec2.describe_instances()
     public_ips = []
