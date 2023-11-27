@@ -8,15 +8,15 @@ import webbrowser
 
 def get_running_aws_instances():
     # Create an EC2 client
-    ec2 = boto3.client('ec2', region_name='us-east-2',aws_access_key_id='####', 
-                aws_secret_access_key='#####')  # Ensure your AWS credentials are configured
+    ec2 = boto3.client('ec2', region_name='us-east-2',aws_access_key_id='AKIAUD4N6KVNORGX43GU', 
+                aws_secret_access_key='uNLjEEH6jbV1zhoRYsSL52Xx6jX0y7AAOZPmr9qr')  # Ensure your AWS credentials are configured
     # Retrieve information about running instances
     response = ec2.describe_instances()
     public_ips = []
     # Extract and display public IPv4 addresses of running instances
     for reservation in response['Reservations']:
         for instance in reservation['Instances']:
-            if 'PublicIpAddress' in instance:
+            if 'PublicIpAddress' in instance and instance['State']['Name'] == 'running':
                 public_ip = instance['PublicIpAddress']
                 security_groups = instance['SecurityGroups']
                 for sg in security_groups:
@@ -33,7 +33,8 @@ def get_running_aws_instances():
 
 def find_primary_broker():
     public_ips = get_running_aws_instances()
-    response = requests.get(f"http://{public_ips[1]}/list_replicas")
+    response = requests.get(f"http://{public_ips[0]}/list_replicas")
+    
     response_data = response.json()  # Extract JSON data from the response
 
     # Accessing the 'replicas' key from the JSON data
@@ -45,53 +46,65 @@ def find_primary_broker():
     # Find the broker with is_primary=True
     primary_broker = next((json.loads(broker) for broker in replicas if json.loads(broker).get('is_primary', False)), None)
 
-    if primary_broker:
-        return primary_broker['ip']
+    if primary_broker and primary_broker['ip'] in public_ips:
+            return primary_broker['ip']
     else:
-        print("No primary broker found..")
+        return None
 
-broker_node = find_primary_broker()
-
-#broker_node = '13.58.245.117:5052' 
-
-
-
-
+def api_subscribe_user(username, broker_node,topic):
+    active_nodes = get_running_aws_instances()
+    broker_node = active_nodes[0]
+    print("Primary broker is down ,updating the broker the primary broker to "+broker_node)
+    response = requests.post(f"http://{broker_node}/subscribe?username={username}&topic={topic}")
+    print(response.json())
 
 
 def subscribe_user():
     global broker_node
-    
     username = input("Enter username: ")
     topic = input("Enter topic to subscribe: ")
+    broker_node = find_primary_broker()
     try:
-        
-        response = requests.post(f"http://{broker_node}/subscribe?username={username}&topic={topic}")
-        print(response.json())
+        if broker_node is not None:
+            print("Connecting to the primary broker...",broker_node)
+            response = requests.post(f"http://{broker_node}/subscribe?username={username}&topic={topic}")
+            print(response.json())
+        else:
+            api_subscribe_user(username, broker_node, topic)        
     except requests.RequestException:
-        active_nodes = get_running_aws_instances()
-        broker_node = active_nodes[0]
-        print("Primary broker is down ,updating the broker the primary broker to "+broker_node)
-        
-        subscribe_user()
+        api_subscribe_user(username, broker_node, topic)
 
+def api_stream_messages(broker, username):
+    active_nodes = get_running_aws_instances()
+    broker_node = active_nodes[0]
+    print("Primary broker is down ,updating the primary broker to "+broker_node)
+    response = requests.get(f"http://{broker_node}/stream?username={username}", stream=True)
+    if response.status_code == 200:
+        print("Opening window for streaming "+username+"'s messages..")
+        webbrowser.open(f"http://{broker_node}/stream?username={username}")
+
+#Function to stream the messages of the respective user
 def stream_messages():
+    global broker_node
     username = input("Enter username to stream messages: ")
     broker_node = find_primary_broker()
     try:
-        print("Opening window for streaming "+username+"'s messages..")
-        webbrowser.open(f"http://{broker_node}/stream?username={username}")
-       
+        if broker_node is not None:
+            print("Connecting to the primary broker...",broker_node)
+            response = requests.get(f"http://{broker_node}/stream?username={username}", stream=True)
+            if response.status_code == 200:
+                print("Opening window for streaming "+username+"'s messages..")
+                webbrowser.open(f"http://{broker_node}/stream?username={username}")
+        else:
+            api_stream_messages(broker_node, username)
     except requests.RequestException:
-        active_nodes = get_running_aws_instances()
-        broker_node = active_nodes[0]
-        print("Primary broker is down ,updating the broker the primary broker to "+broker_node)
-        stream_messages(username, broker_node)       
+        api_stream_messages(broker_node, username)     
 
 
 def main():
-    print("Connecting to the primary broker....")
-    print("Primary broker found with ip: ",broker_node)
+    public_ips = get_running_aws_instances()
+    print("List of available nodes..")
+    print(public_ips)
     while True:
         print("\nMenu:")
         print("1. Subscribe User")
