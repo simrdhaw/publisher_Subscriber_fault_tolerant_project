@@ -6,14 +6,14 @@ import boto3
 def get_running_aws_instances():
     # Create an EC2 client
     ec2 = boto3.client('ec2', region_name='us-east-2',aws_access_key_id='####', 
-                aws_secret_access_key='######')  # Ensure your AWS credentials are configured
+                aws_secret_access_key='####')  # Ensure your AWS credentials are configured
     # Retrieve information about running instances
     response = ec2.describe_instances()
     public_ips = []
     # Extract and display public IPv4 addresses of running instances
     for reservation in response['Reservations']:
         for instance in reservation['Instances']:
-            if 'PublicIpAddress' in instance:
+            if 'PublicIpAddress' in instance and instance['State']['Name'] == 'running':
                 public_ip = instance['PublicIpAddress']
                 security_groups = instance['SecurityGroups']
                 for sg in security_groups:
@@ -30,7 +30,8 @@ def get_running_aws_instances():
 
 def find_primary_broker():
     public_ips = get_running_aws_instances()
-    response = requests.get(f"http://{public_ips[1]}/list_replicas")
+    response = requests.get(f"http://{public_ips[0]}/list_replicas")
+    print("List of available nodes: ",public_ips)
     response_data = response.json()  # Extract JSON data from the response
 
     # Accessing the 'replicas' key from the JSON data
@@ -42,42 +43,41 @@ def find_primary_broker():
     # Find the broker with is_primary=True
     primary_broker = next((json.loads(broker) for broker in replicas if json.loads(broker).get('is_primary', False)), None)
 
-    if primary_broker:
-        return primary_broker['ip']
-        
+    if primary_broker and primary_broker['ip'] in public_ips:
+            return primary_broker['ip']
     else:
-        print("No primary broker found..")
-
-
-broker_node = find_primary_broker() 
+        return None
 
 
 
-#broker_node = ''
+def api_publish_topic(broker_node, topic, data):
+    active_nodes = get_running_aws_instances()
+    broker_node = active_nodes[0]
+    print("Primary broker is down ,updating the broker the primary broker to "+broker_node)
+    response = requests.post(f"http://{broker_node}/publish?topic={topic}&data={data}")
+    print(response.json())
 
 def publish_topic():
     global broker_node
-    print("Publishing messages to broker with ip: "+broker_node)
     topic = input("Enter topic: ")
     data = input("Enter data: ")
+    broker_node = find_primary_broker() 
     try:
-        response = requests.post(f"http://{broker_node}/publish?topic={topic}&data={data}")
-        print(response.json())
+        if broker_node is not None:
+            print("Connecting to the primary broker...",broker_node)
+            response = requests.post(f"http://{broker_node}/publish?topic={topic}&data={data}")
+            print(response.json())
+        else:
+            api_publish_topic(broker_node, topic, data)
     except requests.RequestException:
-        active_nodes = get_running_aws_instances()
-        broker_node = active_nodes[0]
-        # if broker_node == '18.217.141.92:5053': 
-        #     broker_node = '13.58.245.117:5052' 
-            
-        # else:
-        #     broker_node == '18.217.141.92:5053'
-        print("Primary broker is down ,updating the broker the primary broker to "+broker_node)
-        publish_topic()
+        api_publish_topic(broker_node, topic, data)
         
-
+        
+        
 def main():
-    print("Connecting to the primary broker....")
-    print("Primary broker found with ip: ",broker_node)
+    public_ips = get_running_aws_instances()
+    print("List of available nodes..")
+    print(public_ips)
     while True:
         print("\nMenu:")
         print("1. Publish Topic")
